@@ -1,0 +1,9 @@
+git config --global user.name "bodyomer111-bit"
+git config --global user.email "bodyomer111@gmail.com"
+
+git init
+git add .
+git commit -m "first deploy"
+git branch -M main
+git remote add origin https://github.com/bodyomer111-bit/SchoolBot.git
+git push -u origin main
