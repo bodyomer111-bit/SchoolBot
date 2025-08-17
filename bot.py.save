@@ -4,7 +4,7 @@ import os
 import json
 
 # التوكن جاهز من الكود السابق
-TOKEN = "8391860066:AAGIisoaKtjI2ibIsyPikLxknP-rSiaxp5g"
+TOKEN = "8391860066:AAGwmcQDPDQ7OwBSmL1Cp9YAXaU9oqU9io8"
 bot = telebot.TeleBot(TOKEN)
 # ملف البيانات لتخزين الملفات المضافة
 DATA_FILE = "data.json"
