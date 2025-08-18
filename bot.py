@@ -149,3 +149,6 @@ def add_file(message):
 
 # تشغيل البوت
 bot.polling(none_stop=True)
+from keep_alive import keep_alive  
+keep_alive()  
+bot.polling()  
