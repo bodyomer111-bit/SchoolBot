@@ -1,154 +1,276 @@
-import telebot
-from telebot import types
+import gspread
+from oauth2client.service_account import ServiceAccountCredentials
 import os
 import json
+import telebot
+from telebot import types
+from keep_alive import keep_alive
+import time
 
-# التوكن الخاص بك
-TOKEN = "8391860066:AAGz2-Ujds1ERWA7In-5gIHiGshq1Kt9vg8"
+# إعداد نطاق الوصول لجوجل شيت
+scope = [
+    "https://spreadsheets.google.com/feeds",
+    "https://www.googleapis.com/auth/spreadsheets"
+]
+creds = ServiceAccountCredentials.from_json_keyfile_name(
+    'path_to_your_credentials.json', scope)
+client = gspread.authorize(creds)
+
+
+# تحميل المواد من أوراق Google Sheets
+def load_subjects_from_sheets():
+    try:
+        sheet_urls = [
+            "https://docs.google.com/spreadsheets/d/1hdCK7m44eU5c0dD8agOj1prJxxdHIMa61XE_BO6jFqw/edit?gid=0",
+            "https://docs.google.com/spreadsheets/d/1hdCK7m44eU5c0dD8agOj1prJxxdHIMa61XE_BO6jFqw/edit?gid=2140109628",
+            "https://docs.google.com/spreadsheets/d/1hdCK7m44eU5c0dD8agOj1prJxxdHIMa61XE_BO6jFqw/edit?gid=92915964",
+            "https://docs.google.com/spreadsheets/d/1hdCK7m44eU5c0dD8agOj1prJxxdHIMa61XE_BO6jFqw/edit?gid=1925235200"
+        ]
+        subjects_data = {}
+        for index, url in enumerate(sheet_urls):
+            sheet = client.open_by_url(url).sheet1
+            subjects_data[f"الصف {index + 1}"] = {
+                "الترم الأول": sheet.col_values(1)[1:],  # العمود الأول
+                "الترم الثاني": sheet.col_values(2)[1:]  # العمود الثاني
+            }
+        return subjects_data
+    except Exception as e:
+        print(f"خطأ في تحميل المواد: {e}")
+        return {}
+
+
+# إعداد البوت
+TOKEN = os.environ.get('BOT_TOKEN')
+if not TOKEN:
+    print("❌ خطأ: لم يتم العثور على BOT_TOKEN في متغيرات البيئة")
+    print("📋 يرجى إضافة TOKEN في Secrets")
+    exit()
+
 bot = telebot.TeleBot(TOKEN)
 
-# ملف البيانات لتخزين الملفات المضافة
-DATA_FILE = "data.json"
-FILES_DIR = "files"
-
-# تحميل البيانات أو إنشاء جديد
-if os.path.exists(DATA_FILE):
-    with open(DATA_FILE, "r", encoding="utf-8") as f:
-        data = json.load(f)
-else:
-    data = {}
-
-if not os.path.exists(FILES_DIR):
-    os.makedirs(FILES_DIR)
-
+# متغيرات عامة
 user_state = {}
 temp_selection = {}
+FILES_DIR = "files"
+DATA_FILE = "data.json"
 
-# القوائم
-YEARS = ["الصف الأول", "الصف الثاني", "الصف الثالث", "الصف الرابع"]
-TERMS = ["الترم الأول", "الترم الثاني"]
 
-# المواد لكل سنة وترم (اتركها فارغة لتملأها انت)
-SUBJECTS = {
-    "الصف الأول": {"الترم الأول": ["لغه انجلزيه","رسم ميكانيكي","تكنولوجيا الورش","السلامه والصحة المهنية","الفيزياء التطبيقية","" ], "الترم الثاني": ["التفكير الابداعي والتواصل","رياضيات تطبيقية (1)","كيمياء صناعية","تكنولوجيا المعلومات ومعالجة البيانات و احصاء","الرسم فني والتجميعي","لغة انجليزية فنية (1)","أنظمة السيارات","مهارات تقني السيارات (عملي I)"]},
-    "الصف الثاني": {"الترم الأول": [], "الترم الثاني": []},
-    "الصف الثالث": {"الترم الأول": [], "الترم الثاني": []},
-    "الصف الرابع": {"الترم الأول": [], "الترم الثاني": []},
-}
+# تحميل البيانات
+def load_data():
+    try:
+        if os.path.exists(DATA_FILE):
+            with open(DATA_FILE, "r", encoding="utf-8") as f:
+                return json.load(f)
+    except Exception as e:
+        print(f"خطأ في تحميل البيانات: {e}")
+    return {}
+
 
 # حفظ البيانات
 def save_data():
-    with open(DATA_FILE, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=4)
+    try:
+        with open(DATA_FILE, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=4)
+    except Exception as e:
+        print(f"خطأ في حفظ البيانات: {e}")
 
-# بدء البوت
+
+data = load_data()
+
+
+# بداية البوت
 @bot.message_handler(commands=["start"])
-def send_welcome(message):
-    markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
-    for year in YEARS:
-        markup.add(year)
-    bot.send_message(message.chat.id, "اختر السنة الدراسية:", reply_markup=markup)
-    user_state[message.chat.id] = "choose_year"
+def start(message):
+    try:
+        markup = types.InlineKeyboardMarkup()
+        markup.add(
+            types.InlineKeyboardButton("📚 تصفح المواد",
+                                       callback_data="browse"))
+        markup.add(
+            types.InlineKeyboardButton("➕ إضافة مادة", callback_data="add"))
 
-# اختيار السنة
-@bot.message_handler(func=lambda msg: user_state.get(msg.chat.id) == "choose_year")
-def choose_year(message):
-    if message.text not in YEARS:
-        bot.send_message(message.chat.id, "اختر سنة صحيحة.")
-        return
-    temp_selection[message.chat.id] = {"year": message.text}
-    markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
-    for term in TERMS:
-        markup.add(term)
-    bot.send_message(message.chat.id, "اختر الترم:", reply_markup=markup)
-    user_state[message.chat.id] = "choose_term"
+        bot.send_message(message.chat.id,
+                         "🎓 *مرحباً بك في بوت المواد الدراسية*\n\n"
+                         "📋 اختر ما تريد فعله:",
+                         reply_markup=markup,
+                         parse_mode="Markdown")
+        user_state[message.chat.id] = "main_menu"
+    except Exception as e:
+        print(f"خطأ في /start: {e}")
 
-# اختيار الترم
-@bot.message_handler(func=lambda msg: user_state.get(msg.chat.id) == "choose_term")
-def choose_term(message):
-    year = temp_selection[message.chat.id]["year"]
-    if message.text not in TERMS:
-        bot.send_message(message.chat.id, "اختر ترم صحيح.")
-        return
-    temp_selection[message.chat.id]["term"] = message.text
-    markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
-    for subject in SUBJECTS[year][message.text]:
-        markup.add(subject)
-    bot.send_message(message.chat.id, "اختر المادة:", reply_markup=markup)
-    user_state[message.chat.id] = "choose_subject"
 
-# اختيار المادة
-@bot.message_handler(func=lambda msg: user_state.get(msg.chat.id) == "choose_subject")
-def choose_subject(message):
-    year = temp_selection[message.chat.id]["year"]
-    term = temp_selection[message.chat.id]["term"]
-    if message.text not in SUBJECTS[year][term]:
-        bot.send_message(message.chat.id, "اختر مادة صحيحة.")
-        return
-    temp_selection[message.chat.id]["subject"] = message.text
+# معالج الأزرار
+@bot.callback_query_handler(func=lambda call: True)
+def callback_handler(call):
+    try:
+        chat_id = call.message.chat.id
 
-    markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
-    markup.add("📄 عرض ملفات المادة", "➕ إضافة ملف")
-    markup.add("🏠 العودة للقائمة الرئيسية")
-    bot.send_message(message.chat.id, "اختر الإجراء:", reply_markup=markup)
-    user_state[message.chat.id] = "subject_menu"
+        if call.data == "browse":
+            browse_years(chat_id)
+        elif call.data == "add":
+            add_material(chat_id)
+        elif call.data.startswith("year_"):
+            year = call.data.replace("year_", "")
+            browse_terms(chat_id, year)
+        elif call.data.startswith("term_"):
+            year, term = call.data.replace("term_", "").split("||")
+            browse_subjects(chat_id, year, term)
+        elif call.data.startswith("subject_"):
+            year, term, subject = call.data.replace("subject_", "").split("||")
+            browse_files(chat_id, year, term, subject)
+        elif call.data.startswith("file_"):
+            file_path = call.data.replace("file_", "")
+            send_file(chat_id, file_path)
+        elif call.data == "back_to_main":
+            start(call.message)
+        elif call.data.startswith("add_year_"):
+            year = call.data.replace("add_year_", "")
+            temp_selection[chat_id] = {"year": year}
+            add_select_term(chat_id)
+        elif call.data.startswith("add_term_"):
+            term = call.data.replace("add_term_", "")
+            temp_selection[chat_id]["term"] = term
+            add_select_subject(chat_id)
+        elif call.data.startswith("add_subject_"):
+            subject = call.data.replace("add_subject_", "")
+            temp_selection[chat_id]["subject"] = subject
+            bot.send_message(chat_id, "📤 أرسل الملف الذي تريد إضافته:")
+            user_state[chat_id] = "add_file"
 
-# قائمة المادة
-@bot.message_handler(func=lambda msg: user_state.get(msg.chat.id) == "subject_menu")
-def subject_menu(message):
-    if message.text == "📄 عرض ملفات المادة":
-        year = temp_selection[message.chat.id]["year"]
-        term = temp_selection[message.chat.id]["term"]
-        subject = temp_selection[message.chat.id]["subject"]
+        bot.answer_callback_query(call.id)
+    except Exception as e:
+        print(f"خطأ في معالج الأزرار: {e}")
 
-        files_list = data.get(year, {}).get(term, {}).get(subject, [])
-        if not files_list:
-            bot.send_message(message.chat.id, "لا توجد ملفات لهذه المادة.")
+
+def browse_years(chat_id):
+    try:
+        if not data:
+            bot.send_message(chat_id, "❌ لا توجد مواد متاحة حالياً")
+            return
+
+        markup = types.InlineKeyboardMarkup()
+        for year in data.keys():
+            markup.add(
+                types.InlineKeyboardButton(f"📅 {year}",
+                                           callback_data=f"year_{year}"))
+        markup.add(
+            types.InlineKeyboardButton("🏠 العودة للقائمة الرئيسية",
+                                       callback_data="back_to_main"))
+
+        bot.send_message(chat_id,
+                         "📅 اختر السنة الدراسية:",
+                         reply_markup=markup)
+    except Exception as e:
+        print(f"خطأ في تصفح السنوات: {e}")
+
+
+def browse_terms(chat_id, year):
+    try:
+        markup = types.InlineKeyboardMarkup()
+        for term in data[year].keys():
+            markup.add(
+                types.InlineKeyboardButton(
+                    f"📚 {term}", callback_data=f"term_{year}||{term}"))
+        markup.add(
+            types.InlineKeyboardButton("↩️ العودة", callback_data="browse"))
+
+        bot.send_message(chat_id,
+                         f"📚 اختر الترم في {year}:",
+                         reply_markup=markup)
+    except Exception as e:
+        print(f"خطأ في تصفح الترمات: {e}")
+
+
+def browse_subjects(chat_id, year, term):
+    try:
+        markup = types.InlineKeyboardMarkup()
+        for subject in data[year][term].keys():
+            markup.add(
+                types.InlineKeyboardButton(
+                    f"📖 {subject}",
+                    callback_data=f"subject_{year}||{term}||{subject}"))
+        markup.add(
+            types.InlineKeyboardButton("↩️ العودة",
+                                       callback_data=f"year_{year}"))
+
+        bot.send_message(chat_id,
+                         f"📖 اختر المادة في {term} - {year}:",
+                         reply_markup=markup)
+    except Exception as e:
+        print(f"خطأ في تصفح المواد: {e}")
+
+
+def browse_files(chat_id, year, term, subject):
+    try:
+        files = data[year][term][subject]
+        if not files:
+            bot.send_message(chat_id, "❌ لا توجد ملفات في هذه المادة")
+            return
+
+        markup = types.InlineKeyboardMarkup()
+        for file_path in files:
+            file_name = os.path.basename(file_path)
+            markup.add(
+                types.InlineKeyboardButton(f"📄 {file_name}",
+                                           callback_data=f"file_{file_path}"))
+        markup.add(
+            types.InlineKeyboardButton("↩️ العودة",
+                                       callback_data=f"term_{year}||{term}"))
+
+        bot.send_message(chat_id, f"📄 ملفات {subject}:", reply_markup=markup)
+    except Exception as e:
+        print(f"خطأ في تصفح الملفات: {e}")
+
+
+def send_file(chat_id, file_path):
+    try:
+        if os.path.exists(file_path):
+            with open(file_path, "rb") as f:
+                bot.send_document(chat_id, f)
         else:
-            for file_path in files_list:
-                bot.send_document(message.chat.id, open(file_path, "rb"))
+            bot.send_message(chat_id, "❌ الملف غير موجود")
+    except Exception as e:
+        print(f"خطأ في إرسال الملف: {e}")
+        bot.send_message(chat_id, "❌ حدث خطأ في إرسال الملف")
 
-    elif message.text == "➕ إضافة ملف":
-        bot.send_message(message.chat.id, "أرسل لي ملف PDF أو صورة لإضافته.")
-        user_state[message.chat.id] = "add_file"
 
-    elif message.text == "🏠 العودة للقائمة الرئيسية":
-        send_welcome(message)
-    else:
-        bot.send_message(message.chat.id, "اختر أمر صحيح.")
+# تعديل add_material لعرض المواد من Google Sheets
+def add_material(chat_id):
+    try:
+        subjects_data = load_subjects_from_sheets()
+        if not subjects_data:
+            bot.send_message(chat_id,
+                             "❌ لا توجد بيانات مواد متاحة من Google Sheets")
+            return
 
-# إضافة ملف
-@bot.message_handler(content_types=["document", "photo"], func=lambda msg: user_state.get(msg.chat.id) == "add_file")
-def add_file(message):
-    year = temp_selection[message.chat.id]["year"]
-    term = temp_selection[message.chat.id]["term"]
-    subject = temp_selection[message.chat.id]["subject"]
+        markup = types.InlineKeyboardMarkup()
+        for year, terms in subjects_data.items():
+            markup.add(
+                types.InlineKeyboardButton(f"📅 {year}",
+                                           callback_data=f"add_year_{year}"))
+        markup.add(
+            types.InlineKeyboardButton("🏠 العودة للقائمة الرئيسية",
+                                       callback_data="back_to_main"))
 
-    path_dir = os.path.join(FILES_DIR, year, term, subject)
-    os.makedirs(path_dir, exist_ok=True)
+        bot.send_message(chat_id,
+                         "📅 اختر السنة الدراسية:",
+                         reply_markup=markup)
+    except Exception as e:
+        print(f"خطأ في إضافة المادة: {e}")
 
-    if message.document:
-        file_id = message.document.file_id
-        file_info = bot.get_file(file_id)
-        downloaded_file = bot.download_file(file_info.file_path)
-        file_path = os.path.join(path_dir, message.document.file_name)
-        with open(file_path, "wb") as f:
-            f.write(downloaded_file)
-    elif message.photo:
-        file_id = message.photo[-1].file_id
-        file_info = bot.get_file(file_id)
-        downloaded_file = bot.download_file(file_info.file_path)
-        file_path = os.path.join(path_dir, f"{file_id}.jpg")
-        with open(file_path, "wb") as f:
-            f.write(downloaded_file)
-
-    data.setdefault(year, {}).setdefault(term, {}).setdefault(subject, []).append(file_path)
-    save_data()
-    bot.send_message(message.chat.id, "✅ تم إضافة الملف بنجاح.")
-    user_state[message.chat.id] = "subject_menu"
 
 # تشغيل البوت
-bot.polling(none_stop=True)
-from keep_alive import keep_alive  
-keep_alive()  
-bot.polling()  
+if __name__ == "__main__":
+    print("🤖 Bot is starting...")
+    keep_alive()
+    print("✅ Keep alive server started on port 8080")
+    print("🔄 Starting bot polling...")
+
+    while True:
+        try:
+            bot.polling(none_stop=True, interval=0, timeout=20)
+        except Exception as e:
+            print(f"❌ خطأ في البوت: {e}")
+            print("🔄 إعادة تشغيل البوت خلال 15 ثانية...")
+            time.sleep(15)
+            print("🤖 البوت يعمل مرة أخرى...")
